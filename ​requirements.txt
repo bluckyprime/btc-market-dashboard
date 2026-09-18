@@ -1,6 +1,6 @@
-streamlit
-pandas
-plotly
+
+streamlit-lightweight-charts
 requests
+pandas
 
 
