@@ -20,8 +20,8 @@ if response.status_code == 200:
     st.metric(label="Current BTC Price (USD)", value=f"${current_price:,.2f}")
 
     st.subheader("Last 30 Days Price Trend")
-    st.line_chart(df.set_index("date")["price"])
+    st.line_chart(df.set_index("date")["price"], height=500)
+
 else:
     st.error(
-        "Data load කරගැනීමට නොහැකි විය. කරුණාකර මොහොතකින් නැවත උත්සාහ කරන්න."
-    )
+        "Can't lord Data"
