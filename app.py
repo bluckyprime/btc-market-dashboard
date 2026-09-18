@@ -1,4 +1,14 @@
-import matplotlib.pyplot as plt
+import os
+import subprocess
+import sys
+
+# matplotlib නැත්නම් automatic install කරගැනීම
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "matplotlib"])
+    import matplotlib.pyplot as plt
+
 import pandas as pd
 import requests
 import streamlit as st
@@ -9,6 +19,7 @@ st.set_page_config(
 
 st.title("🪙 BTC / USD Real-Time Price View")
 
+# CoinGecko API එකෙන් Data ලබා ගැනීම
 url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=30"
 response = requests.get(url)
 
@@ -37,6 +48,7 @@ if response.status_code == 200:
     for idx, row in df.iterrows():
         color = "#089981" if row["close"] >= row["open"] else "#F23645"
 
+        # High/Low Wick
         ax.plot(
             [row["time"], row["time"]],
             [row["low"], row["high"]],
@@ -44,6 +56,7 @@ if response.status_code == 200:
             linewidth=1,
         )
 
+        # Open/Close Body
         height = abs(row["close"] - row["open"])
         bottom = min(row["open"], row["close"])
         ax.bar(row["time"], height, bottom=bottom, color=color, width=0.6)
