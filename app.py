@@ -9,7 +9,6 @@ st.set_page_config(
 
 st.title("🪙 BTC / USD Real-Time Price View")
 
-# CoinGecko API එකෙන් OHLC Data ලබා ගැනීම
 url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=30"
 response = requests.get(url)
 
@@ -22,7 +21,6 @@ if response.status_code == 200:
     prev_price = df["close"].iloc[0]
     price_change = ((current_price - prev_price) / prev_price) * 100
 
-    # Metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Current Price", f"${current_price:,.2f}")
     col2.metric("30D Change", f"{price_change:+.2f}%")
@@ -31,26 +29,25 @@ if response.status_code == 200:
 
     st.subheader("📊 Candlestick Chart")
 
-    # Python Matplotlib භාවිතයෙන් Custom Candlestick Chart එක ඇඳීම
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Dark Theme Background Settings
     fig.patch.set_facecolor("#0e1117")
     ax.set_facecolor("#0e1117")
 
-    # Candle එකින් එක Python වලින් Drawing කිරීම
     for idx, row in df.iterrows():
         color = "#089981" if row["close"] >= row["open"] else "#F23645"
 
-        # High & Low Wick line
-        ax.plot([row["time"], row["time"]], [row["low"], row["high"]], color=color, linewidth=1)
+        ax.plot(
+            [row["time"], row["time"]],
+            [row["low"], row["high"]],
+            color=color,
+            linewidth=1,
+        )
 
-        # Open & Close Body rectangle
         height = abs(row["close"] - row["open"])
         bottom = min(row["open"], row["close"])
         ax.bar(row["time"], height, bottom=bottom, color=color, width=0.6)
 
-    # Grid & Axes Styling
     ax.grid(True, color="#2b2b2b", linestyle="--", alpha=0.5)
     ax.tick_params(colors="white")
     ax.spines["bottom"].set_color("#444")
@@ -64,4 +61,3 @@ else:
     st.error(
         "Data load කරගැනීමට නොහැකි විය. කරුණාකර මොහොතකින් නැවත උත්සාහ කරන්න."
     )
-
