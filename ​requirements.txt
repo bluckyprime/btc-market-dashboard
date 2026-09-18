@@ -1,6 +1,2 @@
-
-streamlit-lightweight-charts
 requests
-pandas
-
 
