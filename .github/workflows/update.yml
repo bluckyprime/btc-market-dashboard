@@ -2,20 +2,20 @@ name: Daily BTC Data Update
 
 on:
   schedule:
-    - cron: '0 1 * * *' # දිනපතා UTC වෙලාවෙන් 01:00 ට Run වේ
-  workflow_dispatch: # Manual run කිරීමට පහසුකම ලබා දෙයි
+    - cron: "0 0 * * *" # Runs daily at 00:00 UTC
+  workflow_dispatch:
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # <-- මෙතන v4 කළාම Warning එක අයින් වෙනවා
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # <-- මේකත් v5 කළොත් වඩාත් හොඳයි
         with:
-          python-version: '3.10'
+          python-version: "1.10"
 
       - name: Install Dependencies
         run: |
@@ -27,8 +27,7 @@ jobs:
       - name: Commit and Push Changes
         run: |
           git config --global user.name "github-actions[bot]"
-          git config --global user.name "github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "Auto-update BTC data" || exit 0
           git push
-
