@@ -1,103 +1,213 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
-import requests
+import plotly.graph_objects as go
+from zipfile import ZipFile
+from pathlib import Path
 
 st.set_page_config(
-    page_title="BTC Dashboard",
+    page_title="BTC Market Dashboard",
     page_icon="₿",
     layout="wide"
 )
 
-st.title("₿ BTC / USD Dashboard")
+st.title("₿ BTC / USD Candlestick Dashboard")
 
-url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+ZIP_FILE = Path("BTC_1m_2025_to_8.9.26.zip")
 
-params = {
-    "vs_currency": "usd",
-    "days": "30",
-    "interval": "hourly"
-}
 
-try:
-    response = requests.get(
-        url,
-        params=params,
-        timeout=15
+@st.cache_data
+def load_data():
+    with ZipFile(ZIP_FILE) as z:
+        csv_files = [f for f in z.namelist() if f.lower().endswith(".csv")]
+
+        if not csv_files:
+            raise ValueError("No CSV file found inside ZIP.")
+
+        file_name = csv_files[0]
+
+        df = pd.read_csv(z.open(file_name))
+
+    # Binance-style data without headers
+    if "open" not in [str(c).lower() for c in df.columns]:
+        if len(df.columns) >= 6:
+            df = df.iloc[:, :6]
+            df.columns = [
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume"
+            ]
+
+    # Normalize column names
+    df.columns = [str(c).strip().lower() for c in df.columns]
+
+    # Find timestamp column
+    timestamp_col = None
+    for c in ["timestamp", "open_time", "datetime", "date", "time"]:
+        if c in df.columns:
+            timestamp_col = c
+            break
+
+    if timestamp_col is None:
+        raise ValueError("Timestamp column not found.")
+
+    df["timestamp"] = pd.to_datetime(
+        df[timestamp_col],
+        unit="ms",
+        errors="coerce"
     )
 
-    if response.status_code != 200:
-        st.error(f"CoinGecko API Error: {response.status_code}")
-        st.code(response.text)
+    # If timestamp was already a normal datetime
+    if df["timestamp"].isna().mean() > 0.5:
+        df["timestamp"] = pd.to_datetime(
+            df[timestamp_col],
+            errors="coerce"
+        )
+
+    required = ["open", "high", "low", "close"]
+
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(
+        subset=["timestamp", "open", "high", "low", "close"]
+    )
+
+    df = df.sort_values("timestamp")
+    df = df.set_index("timestamp")
+
+    return df
+
+
+try:
+    df = load_data()
+
+    st.sidebar.header("Chart Settings")
+
+    timeframe = st.sidebar.selectbox(
+        "Candle timeframe",
+        [
+            "1 minute",
+            "5 minutes",
+            "15 minutes",
+            "30 minutes",
+            "1 hour",
+            "4 hours",
+            "1 day"
+        ],
+        index=4
+    )
+
+    timeframe_map = {
+        "1 minute": "1min",
+        "5 minutes": "5min",
+        "15 minutes": "15min",
+        "30 minutes": "30min",
+        "1 hour": "1h",
+        "4 hours": "4h",
+        "1 day": "1D"
+    }
+
+    rule = timeframe_map[timeframe]
+
+    start_date = st.sidebar.date_input(
+        "Start date",
+        df.index.min().date()
+    )
+
+    end_date = st.sidebar.date_input(
+        "End date",
+        df.index.max().date()
+    )
+
+    filtered = df.loc[
+        str(start_date):str(end_date)
+    ]
+
+    if filtered.empty:
+        st.error("No data available for this date range.")
         st.stop()
 
-    data = response.json()
+    # Convert 1-minute data into OHLC candles
+    candles = filtered.resample(rule).agg({
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last"
+    }).dropna()
 
-except requests.RequestException as e:
-    st.error("Could not connect to CoinGecko.")
-    st.code(str(e))
-    st.stop()
+    current_price = filtered["close"].iloc[-1]
 
-prices = data.get("prices", [])
+    col1, col2, col3 = st.columns(3)
 
-if not prices:
-    st.error("CoinGecko returned no price data.")
-    st.stop()
+    col1.metric(
+        "BTC Price",
+        f"${current_price:,.2f}"
+    )
 
-df = pd.DataFrame(
-    prices,
-    columns=["timestamp", "price"]
-)
+    col2.metric(
+        "Period High",
+        f"${filtered['high'].max():,.2f}"
+    )
 
-df["timestamp"] = pd.to_datetime(
-    df["timestamp"],
-    unit="ms"
-)
+    col3.metric(
+        "Period Low",
+        f"${filtered['low'].min():,.2f}"
+    )
 
-df = df.set_index("timestamp")
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=candles.index,
+                open=candles["open"],
+                high=candles["high"],
+                low=candles["low"],
+                close=candles["close"],
+                increasing_line_color="#00c853",
+                decreasing_line_color="#ff1744",
+                increasing_fillcolor="#00c853",
+                decreasing_fillcolor="#ff1744",
+                name="BTC"
+            )
+        ]
+    )
 
-current_price = df["price"].iloc[-1]
-starting_price = df["price"].iloc[0]
+    fig.update_layout(
+        title=f"BTC/USD — {timeframe} Candles",
+        xaxis_title="Time",
+        yaxis_title="Price (USD)",
+        template="plotly_dark",
+        height=650,
+        dragmode="zoom",
+        xaxis=dict(
+            rangeslider=dict(
+                visible=True
+            ),
+            type="date"
+        ),
+        yaxis=dict(
+            fixedrange=False
+        ),
+        hovermode="x unified"
+    )
 
-change = (
-    (current_price - starting_price)
-    / starting_price
-) * 100
+    st.plotly_chart(
+        fig,
+        width="stretch",
+        config={
+            "scrollZoom": True,
+            "displaylogo": False,
+            "modeBarButtonsToAdd": [
+                "drawline",
+                "drawopenpath",
+                "eraseshape"
+            ]
+        }
+    )
 
-high = df["price"].max()
-low = df["price"].min()
-
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric(
-    "BTC Price",
-    f"${current_price:,.2f}"
-)
-
-col2.metric(
-    "30D Change",
-    f"{change:+.2f}%"
-)
-
-col3.metric(
-    "30D High",
-    f"${high:,.2f}"
-)
-
-col4.metric(
-    "30D Low",
-    f"${low:,.2f}"
-)
-
-st.subheader("📈 BTC Price — 30 Days")
-
-st.line_chart(
-    df["price"],
-    height=500
-)
-
-st.subheader("📋 Price History")
-
-st.dataframe(
-    df.tail(20),
-    use_container_width=True
-)
+except Exception as e:
+    st.error(f"Error loading data: {e}")
