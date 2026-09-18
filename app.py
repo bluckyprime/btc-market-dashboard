@@ -1,4 +1,5 @@
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 
@@ -8,7 +9,7 @@ st.set_page_config(
 
 st.title("🪙 BTC / USD Real-Time Price View")
 
-# CoinGecko API එකෙන් 30-Day OHLC Data ගැනීම
+# CoinGecko API එකෙන් 30-Day OHLC Data ලබා ගැනීම
 url = "https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=30"
 response = requests.get(url)
 
@@ -27,49 +28,33 @@ if response.status_code == 200:
     col3.metric("30D High", f"${df['high'].max():,.2f}")
     col4.metric("30D Low", f"${df['low'].min():,.2f}")
 
-    st.subheader("📊 Candlestick Chart (Binance Style)")
+    st.subheader("📊 Candlestick Chart")
 
-    # Chart scaling සකස් කරගැනීම
-    min_p = df["low"].min()
-    max_p = df["high"].max()
-    p_range = max_p - min_p if max_p != min_p else 1
+    # Native Plotly Interactive Candlestick Chart
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=df["time"],
+                open=df["open"],
+                high=df["high"],
+                low=df["low"],
+                close=df["close"],
+                increasing_line_color="#089981",  # Green
+                decreasing_line_color="#F23645",  # Red
+            )
+        ]
+    )
 
-    candles_html = ""
-    for idx, row in df.iterrows():
-        is_green = row["close"] >= row["open"]
-        color = "#089981" if is_green else "#F23645"
+    fig.update_layout(
+        template="plotly_dark",
+        xaxis_rangeslider_visible=False,
+        height=500,
+        margin=dict(l=20, r=20, t=20, b=20),
+        paper_bgcolor="#0e1117",
+        plot_bgcolor="#0e1117",
+    )
 
-        high_pct = ((row["high"] - min_p) / p_range) * 100
-        low_pct = ((row["low"] - min_p) / p_range) * 100
-        open_pct = ((row["open"] - min_p) / p_range) * 100
-        close_pct = ((row["close"] - min_p) / p_range) * 100
-
-        body_bottom = min(open_pct, close_pct)
-        body_height = max(abs(close_pct - open_pct), 0.8)
-        wick_height = high_pct - low_pct
-
-        candles_html += f"""
-        <div style="flex: 1; height: 100%; position: relative; display: flex; align-items: flex-end; justify-content: center;" title="Date: {row['time'].strftime('%Y-%m-%d')}&#10;Open: ${row['open']:,.2f}&#10;High: ${row['high']:,.2f}&#10;Low: ${row['low']:,.2f}&#10;Close: ${row['close']:,.2f}">
-            <!-- Wick (High-Low) -->
-            <div style="position: absolute; bottom: {low_pct}%; height: {wick_height}%; width: 1.5px; background-color: {color};"></div>
-            <!-- Body (Open-Close) -->
-            <div style="position: absolute; bottom: {body_bottom}%; height: {body_height}%; width: 70%; background-color: {color}; border-radius: 1px;"></div>
-        </div>
-        """
-
-    # HTML/CSS Dark Theme Box එකක් ඇතුළේ Candles render කිරීම
-    chart_ui = f"""
-    <div style="background-color: #0e1117; border: 1px solid #2b2b2b; border-radius: 8px; padding: 20px 10px; height: 380px; display: flex; align-items: flex-end; gap: 2px;">
-        {candles_html}
-    </div>
-    <div style="display: flex; justify-content: space-between; color: #888; font-size: 12px; margin-top: 6px;">
-        <span>{df['time'].iloc[0].strftime('%b %d')}</span>
-        <span>{df['time'].iloc[len(df)//2].strftime('%b %d')}</span>
-        <span>{df['time'].iloc[-1].strftime('%b %d')}</span>
-    </div>
-    """
-
-    st.markdown(chart_ui, unsafe_allow_html=True)
+    st.plotly_chart(fig, use_container_width=True)
 
 else:
     st.error(
