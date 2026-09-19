@@ -34,4 +34,7 @@ st.write("First date:", df["timestamp"].iloc[0].date())
 st.write("Last date:", df["timestamp"].iloc[-1].date())
 
 st.write("### Last 5 rows")
-st.dataframe(df.tail())
+
+last_5 = df.tail(5).to_string(index=False)
+
+st.code(last_5, language="text")
