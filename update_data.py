@@ -5,308 +5,239 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
-
-ZIP_FILE = "BTC_1m_2025_to_8.9.26.zip"
-
 SYMBOL = "BTCUSDT"
 INTERVAL = "1m"
 
+ZIP_FILE = "BTC_1m_2025_to_8.9.26.zip"
+CSV_NAME = "BTC_1m_2025_to_8.9.26.csv"
+
 BASE_URL = (
     "https://data.binance.vision/data/spot/daily/klines"
+    f"/{SYMBOL}/{INTERVAL}"
 )
 
-CSV_COLUMNS = [
-    "timestamp",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-]
-
+# --------------------------------------------------
+# Read existing data
+# --------------------------------------------------
 
 def get_existing_data():
 
-    if not os.path.exists(ZIP_FILE):
-        raise FileNotFoundError(
-            f"{ZIP_FILE} not found."
-        )
-
-    print("Reading existing ZIP...")
-
     with zipfile.ZipFile(ZIP_FILE, "r") as z:
 
-        csv_files = [
-            f for f in z.namelist()
-            if f.lower().endswith(".csv")
-        ]
+        with z.open(CSV_NAME) as f:
+            df = pd.read_csv(f)
 
-        if not csv_files:
-            raise ValueError(
-                "No CSV file found inside ZIP."
-            )
-
-        csv_file = csv_files[0]
-
-        with z.open(csv_file) as f:
-
-            df = pd.read_csv(
-                f,
-                parse_dates=["timestamp"],
-                low_memory=False
-            )
-
-    df = df[CSV_COLUMNS]
-
-    df = df.sort_values("timestamp")
-
-    print(
-        "Existing last timestamp:",
-        df["timestamp"].iloc[-1]
+    # IMPORTANT:
+    # Make existing timestamps UTC-aware
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        utc=True
     )
 
     return df
 
 
-def download_daily_data(date_value):
+# --------------------------------------------------
+# Download one day's Binance data
+# --------------------------------------------------
 
-    date_str = date_value.strftime("%Y-%m-%d")
+def download_day(date):
+
+    date_str = date.strftime("%Y-%m-%d")
 
     url = (
         f"{BASE_URL}/"
-        f"{SYMBOL}/"
-        f"{INTERVAL}/"
         f"{SYMBOL}-{INTERVAL}-{date_str}.zip"
     )
 
     print(f"Downloading {date_str}...")
 
-    try:
+    response = requests.get(url, timeout=60)
 
-        response = requests.get(
-            url,
-            timeout=30
-        )
-
-        if response.status_code != 200:
-
-            print(
-                f"  No file available "
-                f"(HTTP {response.status_code})"
-            )
-
-            return None
-
-        with zipfile.ZipFile(
-            io.BytesIO(response.content)
-        ) as z:
-
-            csv_files = [
-                f for f in z.namelist()
-                if f.lower().endswith(".csv")
-            ]
-
-            if not csv_files:
-                print("  No CSV inside downloaded ZIP.")
-                return None
-
-            with z.open(csv_files[0]) as f:
-
-                df = pd.read_csv(
-                    f,
-                    header=None
-                )
-
-        # Binance daily kline format:
-        # open_time, open, high, low, close, volume, ...
-
-        df = df.iloc[:, :6]
-
-        df.columns = CSV_COLUMNS
-
-        # Binance Spot data from 2025 uses
-        # microsecond timestamps.
-        df["timestamp"] = pd.to_datetime(
-            df["timestamp"],
-            unit="us",
-            utc=True
-        )
-
-        for column in [
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume"
-        ]:
-
-            df[column] = pd.to_numeric(
-                df[column],
-                errors="coerce"
-            )
-
-        df = df.dropna()
-
+    if response.status_code != 200:
         print(
-            f"  Downloaded {len(df):,} candles."
+            f"  No data available "
+            f"(HTTP {response.status_code})"
         )
-
-        return df
-
-    except Exception as e:
-
-        print(
-            f"  Download failed: {e}"
-        )
-
         return None
 
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
 
-def save_updated_zip(df):
+        csv_files = [
+            name for name in z.namelist()
+            if name.endswith(".csv")
+        ]
 
-    print("Creating updated ZIP...")
+        if not csv_files:
+            print("  No CSV found")
+            return None
 
-    temp_zip = ZIP_FILE + ".tmp"
+        with z.open(csv_files[0]) as f:
 
-    csv_name = (
-        "BTC_1m_2025_to_8.9.26.csv"
+            df = pd.read_csv(
+                f,
+                header=None
+            )
+
+    # Binance kline columns
+    df = df.iloc[:, :6]
+
+    df.columns = [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+    ]
+
+    # Binance timestamps are microseconds
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        unit="us",
+        utc=True
     )
 
-    # Temporary CSV
-    temp_csv = "updated_btc.csv"
+    print(f"  Downloaded {len(df):,} candles.")
 
-    df.to_csv(
-        temp_csv,
+    return df
+
+
+# --------------------------------------------------
+# Save updated ZIP
+# --------------------------------------------------
+
+def save_zip(df):
+
+    # Keep CSV timestamp format compatible
+    # with the existing dashboard
+    output_df = df.copy()
+
+    output_df["timestamp"] = (
+        output_df["timestamp"]
+        .dt.tz_localize(None)
+        .dt.strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    csv_buffer = io.StringIO()
+
+    output_df.to_csv(
+        csv_buffer,
         index=False
     )
 
     with zipfile.ZipFile(
-        temp_zip,
+        ZIP_FILE,
         "w",
         compression=zipfile.ZIP_DEFLATED
     ) as z:
 
-        z.write(
-            temp_csv,
-            arcname=csv_name
+        z.writestr(
+            CSV_NAME,
+            csv_buffer.getvalue()
         )
 
-    os.remove(temp_csv)
 
-    # Replace original ZIP
-    os.replace(
-        temp_zip,
-        ZIP_FILE
-    )
-
-    print("ZIP updated successfully.")
-
+# --------------------------------------------------
+# Main
+# --------------------------------------------------
 
 def main():
 
-    df = get_existing_data()
+    print("Reading existing data...")
 
-    last_timestamp = df[
-        "timestamp"
-    ].iloc[-1]
+    existing = get_existing_data()
 
-    last_date = last_timestamp.date()
+    last_timestamp = existing["timestamp"].max()
 
-    # Binance daily archive data becomes
-    # available on the following UTC day.
+    print(
+        f"Last existing candle: "
+        f"{last_timestamp}"
+    )
+
+    # Yesterday in UTC
     yesterday = (
         datetime.now(timezone.utc).date()
         - timedelta(days=1)
     )
 
     start_date = (
-        last_date + timedelta(days=1)
+        last_timestamp.date()
+        + timedelta(days=1)
     )
 
-    print()
-    print("Current data ends:", last_date)
-    print("Target end date:", yesterday)
-    print()
+    print(
+        f"Updating from {start_date} "
+        f"to {yesterday}"
+    )
 
-    if start_date > yesterday:
-
-        print(
-            "Data is already up to date."
-        )
-
-        return
-
-    new_data = []
+    new_dfs = []
 
     current_date = start_date
 
     while current_date <= yesterday:
 
-        daily_df = download_daily_data(
-            current_date
-        )
+        df = download_day(current_date)
 
-        if daily_df is not None:
-
-            new_data.append(
-                daily_df
-            )
+        if df is not None:
+            new_dfs.append(df)
 
         current_date += timedelta(days=1)
 
-    if not new_data:
+    if not new_dfs:
 
-        print(
-            "No new data downloaded."
-        )
-
+        print("No new data available.")
         return
 
-    new_df = pd.concat(
-        new_data,
+    new_data = pd.concat(
+        new_dfs,
         ignore_index=True
     )
 
-    print()
     print(
-        f"Total new candles: "
-        f"{len(new_df):,}"
+        f"\nTotal new candles: "
+        f"{len(new_data):,}"
     )
 
-    # Combine old + new
+    # --------------------------------------------------
+    # Combine
+    # --------------------------------------------------
+
     combined = pd.concat(
-        [df, new_df],
+        [existing, new_data],
         ignore_index=True
     )
 
-    # Remove accidental duplicates
-    combined = combined.drop_duplicates(
-        subset=["timestamp"],
-        keep="last"
+    # Make absolutely sure EVERYTHING is UTC-aware
+    combined["timestamp"] = pd.to_datetime(
+        combined["timestamp"],
+        utc=True
     )
 
+    # Remove duplicate candles
+    combined = combined.drop_duplicates(
+        subset=["timestamp"]
+    )
+
+    # Sort
     combined = combined.sort_values(
         "timestamp"
-    )
-
-    combined = combined.reset_index(
-        drop=True
-    )
+    ).reset_index(drop=True)
 
     print(
-        "New last timestamp:",
-        combined["timestamp"].iloc[-1]
-    )
-
-    print(
-        "Total candles:",
+        f"Total candles after update: "
         f"{len(combined):,}"
     )
 
-    save_updated_zip(combined)
+    print(
+        f"New last timestamp: "
+        f"{combined['timestamp'].max()}"
+    )
 
-    print()
-    print("DONE.")
+    # Save
+    save_zip(combined)
+
+    print("\nZIP updated successfully!")
 
 
 if __name__ == "__main__":
