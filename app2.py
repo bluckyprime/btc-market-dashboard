@@ -2,14 +2,12 @@ import streamlit as st
 import pandas as pd
 import zipfile
 import json
-import os
-import re
 from datetime import date, timedelta
 import streamlit.components.v1 as components
 
 
 # ============================================================
-# PAGE
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -30,21 +28,24 @@ ZIP_PATH = "BTC_1m_2025_to_8.9.26.zip"
 
 
 # ============================================================
-# LOAD ZIP
+# FIND CSV INSIDE ZIP
 # ============================================================
 
 @st.cache_resource
-def get_zip():
+def get_zip_info():
 
     z = zipfile.ZipFile(ZIP_PATH, "r")
 
     csv_files = [
-        f for f in z.namelist()
-        if f.lower().endswith(".csv")
+        name
+        for name in z.namelist()
+        if name.lower().endswith(".csv")
     ]
 
     if not csv_files:
-        raise FileNotFoundError("No CSV file found inside ZIP.")
+        raise FileNotFoundError(
+            "No CSV file found inside ZIP."
+        )
 
     return z, csv_files[0]
 
@@ -54,30 +55,20 @@ def get_zip():
 # ============================================================
 
 @st.cache_data
-def load_all_data():
+def load_data():
 
-    z, csv_file = get_zip()
+    z, csv_file = get_zip_info()
 
     with z.open(csv_file) as f:
 
         df = pd.read_csv(
             f,
             parse_dates=["timestamp"],
-            low_memory=False
+            low_memory=False,
         )
 
-    df = df[
-        [
-            "timestamp",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
-    ]
-
-    numeric_cols = [
+    required_columns = [
+        "timestamp",
         "open",
         "high",
         "low",
@@ -85,10 +76,20 @@ def load_all_data():
         "volume",
     ]
 
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
+    df = df[required_columns]
+
+    numeric_columns = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
+
+    for column in numeric_columns:
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce",
         )
 
     df = df.dropna()
@@ -101,7 +102,7 @@ def load_all_data():
 
 
 # ============================================================
-# TIMEFRAME RESAMPLING
+# RESAMPLE
 # ============================================================
 
 def resample_data(df, timeframe):
@@ -120,4 +121,554 @@ def resample_data(df, timeframe):
 
     result = df.resample(rule).agg(
         {
-            "open": "first
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }
+    )
+
+    result = result.dropna()
+
+    return result
+
+
+# ============================================================
+# UI
+# ============================================================
+
+st.markdown("### Chart Settings")
+
+col1, col2, col3 = st.columns(
+    [1.2, 1.2, 2]
+)
+
+
+with col1:
+
+    timeframe = st.selectbox(
+        "Timeframe",
+        [
+            "1m",
+            "5m",
+            "15m",
+            "30m",
+            "1H",
+            "4H",
+            "1D",
+        ],
+        index=0,
+    )
+
+
+with col2:
+
+    range_option = st.selectbox(
+        "Range",
+        [
+            "1D",
+            "3D",
+            "7D",
+            "14D",
+            "30D",
+            "90D",
+            "Custom",
+        ],
+        index=0,
+    )
+
+
+with col3:
+
+    latest_available = date(
+        2026,
+        9,
+        7,
+    )
+
+    if range_option == "Custom":
+
+        selected_start = st.date_input(
+            "Start date",
+            value=latest_available
+            - timedelta(days=7),
+            min_value=date(2025, 1, 1),
+            max_value=latest_available,
+        )
+
+        start_date = selected_start
+        end_date = latest_available
+
+    else:
+
+        days = int(
+            range_option.replace("D", "")
+        )
+
+        end_date = latest_available
+
+        start_date = (
+            end_date
+            - timedelta(days=days - 1)
+        )
+
+
+# ============================================================
+# LOAD DATA
+# ============================================================
+
+with st.spinner("Loading BTC market data..."):
+
+    df = load_data()
+
+
+# ============================================================
+# FILTER DATE RANGE
+# ============================================================
+
+start_timestamp = pd.Timestamp(
+    start_date
+)
+
+end_timestamp = (
+    pd.Timestamp(end_date)
+    + pd.Timedelta(days=1)
+)
+
+
+filtered = df[
+    (df.index >= start_timestamp)
+    & (df.index < end_timestamp)
+]
+
+
+# ============================================================
+# RESAMPLE
+# ============================================================
+
+chart_df = resample_data(
+    filtered,
+    timeframe,
+)
+
+
+# ============================================================
+# BASIC INFO
+# ============================================================
+
+c1, c2, c3, c4 = st.columns(4)
+
+
+with c1:
+
+    st.metric(
+        "Candles",
+        f"{len(chart_df):,}",
+    )
+
+
+with c2:
+
+    if len(chart_df) > 0:
+
+        st.metric(
+            "Open",
+            f"${chart_df.iloc[0]['open']:,.2f}",
+        )
+
+
+with c3:
+
+    if len(chart_df) > 0:
+
+        st.metric(
+            "Close",
+            f"${chart_df.iloc[-1]['close']:,.2f}",
+        )
+
+
+with c4:
+
+    if len(chart_df) > 0:
+
+        change = (
+            (
+                chart_df.iloc[-1]["close"]
+                / chart_df.iloc[0]["open"]
+            )
+            - 1
+        ) * 100
+
+        st.metric(
+            "Change",
+            f"{change:+.2f}%",
+        )
+
+
+# ============================================================
+# NO DATA CHECK
+# ============================================================
+
+if chart_df.empty:
+
+    st.warning(
+        "No market data available for this date range."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# PREPARE CHART DATA
+# ============================================================
+
+chart_data = []
+
+for timestamp, row in chart_df.iterrows():
+
+    chart_data.append(
+        {
+            "time": int(
+                timestamp.timestamp()
+            ),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["volume"]),
+        }
+    )
+
+
+json_data = json.dumps(
+    chart_data,
+    separators=(",", ":"),
+)
+
+
+# ============================================================
+# LIGHTWEIGHT CHART
+# ============================================================
+
+html = f"""
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta
+    name="viewport"
+    content="width=device-width,
+             initial-scale=1.0"
+>
+
+<script src="
+https://unpkg.com/lightweight-charts/
+dist/lightweight-charts.standalone.production.js
+"></script>
+
+<style>
+
+html,
+body {{
+    margin: 0;
+    padding: 0;
+    background: #0e1117;
+    overflow: hidden;
+}}
+
+#chart {{
+    width: 100%;
+    height: 620px;
+}}
+
+</style>
+
+</head>
+
+
+<body>
+
+<div id="chart"></div>
+
+
+<script>
+
+const data = {json_data};
+
+
+const container =
+    document.getElementById("chart");
+
+
+const chart =
+    LightweightCharts.createChart(
+        container,
+        {{
+
+            layout: {{
+
+                background: {{
+                    type: "solid",
+                    color: "#0e1117"
+                }},
+
+                textColor: "#d1d4dc"
+
+            }},
+
+            grid: {{
+
+                vertLines: {{
+                    color:
+                    "rgba(255,255,255,0.05)"
+                }},
+
+                horzLines: {{
+                    color:
+                    "rgba(255,255,255,0.05)"
+                }}
+
+            }},
+
+            crosshair: {{
+
+                mode:
+                LightweightCharts
+                .CrosshairMode
+                .Normal
+
+            }},
+
+            rightPriceScale: {{
+
+                borderColor:
+                "rgba(255,255,255,0.15)"
+
+            }},
+
+            timeScale: {{
+
+                borderColor:
+                "rgba(255,255,255,0.15)",
+
+                timeVisible: true,
+
+                secondsVisible: false,
+
+                rightOffset: 5
+
+            }},
+
+            handleScroll: {{
+
+                mouseWheel: true,
+
+                pressedMouseMove: true,
+
+                horzTouchDrag: true,
+
+                vertTouchDrag: true
+
+            }},
+
+            handleScale: {{
+
+                mouseWheel: true,
+
+                pinch: true,
+
+                axisPressedMouseMove: true
+
+            }}
+
+        }}
+    );
+
+
+// ==========================================================
+// CANDLESTICK SERIES
+// ==========================================================
+
+const candleSeries =
+    chart.addSeries(
+        LightweightCharts.CandlestickSeries,
+        {{
+
+            upColor: "#26a69a",
+
+            downColor: "#ef5350",
+
+            borderUpColor: "#26a69a",
+
+            borderDownColor: "#ef5350",
+
+            wickUpColor: "#26a69a",
+
+            wickDownColor: "#ef5350"
+
+        }}
+    );
+
+
+candleSeries.setData(
+
+    data.map(function(x) {{
+
+        return {{
+
+            time: x.time,
+
+            open: x.open,
+
+            high: x.high,
+
+            low: x.low,
+
+            close: x.close
+
+        }};
+
+    }})
+
+);
+
+
+// ==========================================================
+// VOLUME
+// ==========================================================
+
+const volumeSeries =
+    chart.addSeries(
+        LightweightCharts.HistogramSeries,
+        {{
+
+            priceFormat: {{
+                type: "volume"
+            }},
+
+            priceScaleId: ""
+
+        }}
+    );
+
+
+volumeSeries
+    .priceScale()
+    .applyOptions({{
+
+        scaleMargins: {{
+
+            top: 0.80,
+
+            bottom: 0
+
+        }}
+
+    }});
+
+
+volumeSeries.setData(
+
+    data.map(function(x) {{
+
+        return {{
+
+            time: x.time,
+
+            value: x.volume,
+
+            color:
+                x.close >= x.open
+                ? "rgba(38,166,154,0.45)"
+                : "rgba(239,83,80,0.45)"
+
+        }};
+
+    }})
+
+);
+
+
+// ==========================================================
+// FIT CONTENT
+// ==========================================================
+
+chart
+    .timeScale()
+    .fitContent();
+
+
+// ==========================================================
+// RESPONSIVE
+// ==========================================================
+
+function resizeChart() {{
+
+    chart.applyOptions({{
+
+        width: container.clientWidth,
+
+        height: Math.max(
+            450,
+            Math.min(
+                700,
+                window.innerHeight * 0.70
+            )
+        )
+
+    }});
+
+}}
+
+
+window.addEventListener(
+    "resize",
+    resizeChart
+);
+
+
+resizeChart();
+
+
+// ==========================================================
+// DOUBLE CLICK = RESET
+// ==========================================================
+
+container.addEventListener(
+    "dblclick",
+    function() {{
+
+        chart
+            .timeScale()
+            .fitContent();
+
+    }}
+);
+
+</script>
+
+</body>
+
+</html>
+"""
+
+
+# ============================================================
+# DISPLAY CHART
+# ============================================================
+
+components.html(
+    html,
+    height=650,
+    scrolling=False,
+)
+
+
+st.caption(
+    f"{start_date} → {end_date}"
+    f"  •  {timeframe}"
+    f"  •  {len(chart_df):,} candles"
+    )
